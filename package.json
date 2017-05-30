@@ -1,0 +1,26 @@
+{
+  "name": "netcall",
+  "version": "1.0.0",
+  "description": "call procedures remotely between node process through net socket",
+  "main": "index.js",
+  "service": [
+  ],
+  "scripts": {
+    "test": "node test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/kigiri/netcall.git"
+  },
+  "keywords": [
+    "rpc",
+    "socket",
+    "microservice"
+  ],
+  "author": "Clement Denis",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/kigiri/netcall/issues"
+  },
+  "homepage": "https://github.com/kigiri/netcall#readme"
+}
