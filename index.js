@@ -258,6 +258,11 @@ const q = Promise.all((pkg.service || []).map((name =>
 services.onload = fn => q.then(fn)
 services.onerror = fn => q.catch(fn)
 services.config = config
-services.handle = (name, handler) => routeHandlers.push({ name, handler })
+services.handle = (name, handler) => typeof name === "string"
+  ? routeHandlers.push({ name, handler })
+  : Object.keys(name).map(key => routeHandlers.push({
+      name: key,
+      handler: name[key],
+    }))
 
 module.exports = services
