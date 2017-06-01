@@ -1,9 +1,11 @@
 {
   "name": "netcall",
-  "version": "1.0.3",
+  "version": "2.0.0",
   "description": "call procedures remotely between node process through net socket",
   "main": "index.js",
-  "service": [ "test" ],
+  "service": [
+    "test"
+  ],
   "scripts": {
     "test": "./test.sh"
   },
