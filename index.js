@@ -2,11 +2,12 @@
 const net = require('net')
 const path = require('path')
 
-const config = require(process.env.CONF_PATH || './config')
 const cwd = process.cwd()
 const pkg = require(path.join(cwd, 'package.json'))
-const serviceName = cwd.split(/service-([a-z0-9_]+)$/i)[1]
-  || cwd.split('/').pop()
+const serviceName = cwd.split('/').pop().replace('service-', '')
+const getPort = name => process.env[`SERVICE_${name.toUpperCase()}_PORT`]
+const servicePort = getPort(serviceName)
+
 const services = Object.create(null)
 const routeHandlers = []
 
@@ -224,26 +225,28 @@ const handleAnswer = (broadcasters, index, fn) =>
     tryCall(fn, data, answer => socket.write(buildMessage(index, answer, id)))
 
 
-console.log(`Starting service ${serviceName}:${config.service[serviceName]}...`)
+console.log(`Starting service ${serviceName}:${servicePort}...`)
 
 const q = Promise.all((pkg.service || []).map((name =>
-    connect(config.service[name]).then(client => services[name] = client))))
-  .then(() => {
+    connect(getPort(name)).then(client => services[name] = client))))
+  .then(() => new Promise((s,f) => {
     const broadcasters = Object.create(null)
     const routeNames = routeHandlers
       .sort((a, b) => a.name - b.name)
       .map(a => a.name)
 
-    if (!routeNames.length) return console.log(`no routes exposed`)
+    if (!routeNames.length) return s(console.log(`no routes exposed`))
 
     const tcpServer = net.createServer(socket =>
       handleSocket(socket, broadcasters))
 
-
-    tcpServer.listen(config.service[serviceName], () =>
-      console.log(`serving routes:\n  ${routeNames.join('\n  ')}`))
+    tcpServer.listen(servicePort, () => {
+      s(console.log(`serving routes:\n  ${routeNames.join('\n  ')}`))
+      f = undefined
+    })
 
     tcpServer.on('error', err => {
+      if (f) return f(err)
       console.error('TCP Server ERROR:')
       console.error(err)
       setTimeout(() => process.exit(1))
@@ -253,16 +256,13 @@ const q = Promise.all((pkg.service || []).map((name =>
 
     routeHandlers.forEach(({ name, handler }, index) =>
       handleAnswer(broadcasters, index, handler))
-  })
+  }))
 
 services.onload = fn => q.then(fn)
 services.onerror = fn => q.catch(fn)
-services.config = config
 services.handle = (name, handler) => typeof name === "string"
   ? routeHandlers.push({ name, handler })
-  : Object.keys(name).map(key => routeHandlers.push({
-      name: key,
-      handler: name[key],
-    }))
+  : Object.keys(name).map(key =>
+      routeHandlers.push({ name: key, handler: name[key] }))
 
 module.exports = services
