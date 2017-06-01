@@ -6,6 +6,7 @@ const cwd = process.cwd()
 const pkg = require(path.join(cwd, 'package.json'))
 const serviceName = cwd.split('/').pop().replace('service-', '')
 const getPort = name => process.env[`SERVICE_${name.toUpperCase()}_PORT`]
+
 const servicePort = getPort(serviceName)
 
 const services = Object.create(null)
@@ -103,15 +104,14 @@ const buildMessage = (route, rawData, id) => {
   header.writeUInt8(type, 16)
   header.writeUInt8(route, 17)
 
-  console.log('sending:', { size: data.byteLength, id, type, route })
   return Buffer.concat([ header, data ])
 }
 
 const decode = (type, buf) => {
   const handler = handlers[type]
-  if (!handler) return console.log('unhandled type', type)
+  if (!handler) return console.error('unhandled type', type)
   try { return handler.decode(buf) }
-  catch (err) { console.log(err, '\nparsing failed', { type, buf }) }
+  catch (err) { console.error(err, '\nparsing failed', { type, buf }) }
 }
 
 const handleSocket = (socket, broadcasters) => {
@@ -121,8 +121,6 @@ const handleSocket = (socket, broadcasters) => {
     const id = rawData.readUInt32LE(8)
     const route = rawData.readUInt8(17)
     const type = rawData.readUInt8(16)
-
-    console.log('recieved:', { size, id, type, route })
 
     const broadcast = broadcasters[id] || broadcasters[route]
     if (!broadcast) return
@@ -223,7 +221,6 @@ const tryCall = (fn, arg, handler) => {
 const handleAnswer = (broadcasters, index, fn) =>
   broadcasters[index] = ({ socket, data, id }) =>
     tryCall(fn, data, answer => socket.write(buildMessage(index, answer, id)))
-
 
 console.log(`Starting service ${serviceName}:${servicePort}...`)
 
