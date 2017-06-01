@@ -1,12 +1,12 @@
 'use strict'
 const net = require('net')
 const path = require('path')
+const EventEmitter = require('events')
 
 const cwd = process.cwd()
 const pkg = require(path.join(cwd, 'package.json'))
 const serviceName = cwd.split('/').pop().replace('service-', '')
 const getPort = name => process.env[`SERVICE_${name.toUpperCase()}_PORT`]
-
 const servicePort = getPort(serviceName)
 
 const services = Object.create(null)
@@ -184,28 +184,65 @@ const open = (port, count = 0) => getClientSocket(port, count)
     : (console.log(`connection on port ${port} retry #${count} / 30`),
       open(port, count)))
 
-const connect = (port, client = Object.create(null), prevRoutes) => open(port)
+const connect = (port, client, prevRoutes, ev) => open(port)
   .then(socket => {
     const broadcasters = Object.create(null)
 
     handleSocket(socket, broadcasters)
 
     return buildRPCHanlder(broadcasters, 0, socket)()
-      .then(routes => ({ socket, routes, broadcasters }))
+      .then(routes => ({ socket, broadcasters, routes }))
   })
   .then(({ routes, socket, broadcasters }) => {
+    const routeNames = Object.keys(routes)
     const ret = Object.create(null)
-    // check if we need to reboot in case of api changes
-    if (prevRoutes && routes.join() !== prevRoutes) return process.exit(0)
+    client || (client = Object.create(null))
 
-    routes.forEach((name, index) => {
-      client[name] = buildRPCHanlder(broadcasters, index + 1, socket)
-      ret[name] = arg => client[name](arg)
+    // check if we need to reboot in case of api changes
+    if (prevRoutes && routeNames.join() !== prevRoutes) return process.exit(0)
+
+    routeNames.forEach(name => {
+      const { index, isEvent } = routes[name]
+      if (!isEvent) {
+        client[name] = buildRPCHanlder(broadcasters, index, socket)
+        return ret[name] = arg => client[name](arg)
+      }
+
+      if (prevRoutes) {
+        broadcasters[index] = ({ data }) => ev.emit(name, data)
+        return socket.write(buildMessage(1, name, 0))
+      }
+
+      // Since event listenners are lazy,
+      // We have to check that the event exist and keep track of which events
+      // I'm subscribed to, in order to recover subs after connection lost.
+      let evMethod = (...args) => {
+        if (!ev) {
+          ev = new EventEmitter
+          ev.resumeRoutes = new Set
+          socket.write(buildMessage(1, name, 0))
+          broadcasters[index] = ({ data }) => ev.emit(name, data)
+        }
+
+        ev.resumeRoutes.add(name)
+
+        const methodHandler = (method, fn) => {
+          ev[method](name, fn)
+          return () => ev.removeListener(fn)
+        }
+
+        // so that is why re-write this method to avoid checking every time
+        return (evMethod = methodHandler)(...args)
+      }
+
+      ret[name] = fn => evMethod('on', fn)
+      ret[name].once = fn => evMethod('once', fn)
+      ret[name].removeAllListeners = () => ev.removeAllListeners(name)
     })
 
     socket.on('error', console.error)
     socket.on('close', () =>
-      setTimeout(() => connect(port, client, routes.join()), 1000))
+      setTimeout(() => connect(port, client, routeNames.join(), ev), 1000))
 
     return ret
   })
@@ -228,17 +265,24 @@ const q = Promise.all((pkg.service || []).map((name =>
     connect(getPort(name)).then(client => services[name] = client))))
   .then(() => new Promise((s,f) => {
     const broadcasters = Object.create(null)
+    const listenners = Object.create(null)
+    const emit = services.emit = Object.create(null)
+
     const routeNames = routeHandlers
       .sort((a, b) => a.name - b.name)
       .map(a => a.name)
 
-    if (!routeNames.length) return s(console.log(`no routes exposed`))
+    if (!routeNames.length) {
+      console.log(`no routes exposed`)
+      return s(emit)
+    }
 
     const tcpServer = net.createServer(socket =>
       handleSocket(socket, broadcasters))
 
     tcpServer.listen(servicePort, () => {
-      s(console.log(`serving routes:\n  ${routeNames.join('\n  ')}`))
+      console.log(`serving routes:\n  ${routeNames.join('\n  ')}`)
+      s(emit)
       f = undefined
     })
 
@@ -249,10 +293,35 @@ const q = Promise.all((pkg.service || []).map((name =>
       setTimeout(() => process.exit(1))
     })
 
-    routeHandlers.unshift({ name: '__getRoutes__', handler: () => routeNames })
+    const routeList = routeHandlers.map(({ name, handler }, index) => {
+      // pad index because the 2 first routes are reserved
+      index = index + 2
+      if (handler) {
+        handleAnswer(broadcasters, index, handler)
+        return { [name]: { index } }
+      }
+      const list = listenners[name] = []
+      emit[name] = data => {
+        const msg = buildMessage(index, data, 0)
+        for (let socket of list) {
+          socket.write(msg)
+        }
+      }
+      return { [name]: { index, isEvent: true } }
+    })
 
-    routeHandlers.forEach(({ name, handler }, index) =>
-      handleAnswer(broadcasters, index, handler))
+    const routeBufferMessage = buildMessage(0, Object.assign(...routeList))
+    broadcasters[0] = ({ socket, id }) => {
+      const msg = Buffer.from(routeBufferMessage)
+      msg.writeUInt32LE(id, 8)
+      socket.write(msg)
+    }
+
+    broadcasters[1] = ({ data, socket }) => {
+      const list = listenners[data]
+      list.push(socket)
+      socket.on('close', () => list.splice(list.indexOf(socket), 1))
+    }
   }))
 
 services.onload = fn => q.then(fn)
