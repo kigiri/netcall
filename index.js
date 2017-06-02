@@ -30,12 +30,10 @@ const getType = val => {
     case 'boolean': return BOOLEAN_TYPE
     case 'function': return FUNCTION_TYPE
     default: {
-      switch (val.constructor) {
-        case Buffer: return BINARY_TYPE
-        case Error: return ERROR_TYPE
-        case Date: return DATE_TYPE
-        default: return JSON_TYPE
-      }
+      if (val instanceof Buffer) return BINARY_TYPE
+      if (val instanceof Error) return ERROR_TYPE
+      if (val instanceof Date) return DATE_TYPE
+      return JSON_TYPE
     }
   }
 }
@@ -250,8 +248,8 @@ const connect = (port, client, prevRoutes, ev) => open(port)
 const tryCall = (fn, arg, handler) => {
   try {
     const ret = fn(arg, services)
-    if (typeof ret.then === 'function') return ret.then(handler, handler)
-    handler(ret)
+    if (ret && typeof ret.then !== 'function') return handler(ret)
+    ret.then(handler, handler)
   } catch (err) { handler(err) }
 }
 
