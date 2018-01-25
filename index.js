@@ -259,7 +259,8 @@ const handleAnswer = (broadcasters, index, fn) =>
 
 console.log(`Starting service ${serviceName}:${servicePort}...`)
 
-const q = Promise.all((pkg.service || []).map((name =>
+let q
+const init = serviceList => q = Promise.all(serviceList.map((name =>
     connect(getPort(name)).then(client => services[name] = client))))
   .then(() => new Promise((s,f) => {
     const broadcasters = Object.create(null)
@@ -322,11 +323,15 @@ const q = Promise.all((pkg.service || []).map((name =>
     }
   }))
 
+init(pkg.service || [])
+
 services.onload = fn => q.then(fn)
 services.onerror = fn => q.catch(fn)
 services.handle = (name, handler) => typeof name === "string"
   ? routeHandlers.push({ name, handler })
   : Object.keys(name).map(key =>
       routeHandlers.push({ name: key, handler: name[key] }))
+
+services.reload = init
 
 module.exports = services
