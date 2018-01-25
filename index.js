@@ -182,6 +182,7 @@ const open = (port, count = 0) => getClientSocket(port, count)
     : (console.log(`connection on port ${port} retry #${count} / 30`),
       open(port, count)))
 
+const cleanup = new WeakMap()
 const connect = (port, client, prevRoutes, ev) => open(port)
   .then(socket => {
     const broadcasters = Object.create(null)
@@ -241,6 +242,11 @@ const connect = (port, client, prevRoutes, ev) => open(port)
     socket.on('error', console.error)
     socket.on('close', () =>
       setTimeout(() => connect(port, client, routeNames.join(), ev), 1000))
+
+    cleanup.set(ret, () => {
+      socket.removeAllListeners()
+      socket.end()
+    })
 
     return ret
   })
@@ -332,6 +338,12 @@ services.handle = (name, handler) => typeof name === "string"
   : Object.keys(name).map(key =>
       routeHandlers.push({ name: key, handler: name[key] }))
 
-services.reload = init
+services.reload = serviceList => {
+  Object.keys(services)
+    .map(key => cleanup.get(services[key]))
+    .filter(Boolean)
+    .forEach(fn => fn())
+  return init(serviceList)
+}
 
 module.exports = services
