@@ -338,12 +338,11 @@ services.handle = (name, handler) => typeof name === "string"
   : Object.keys(name).map(key =>
       routeHandlers.push({ name: key, handler: name[key] }))
 
-services.reload = serviceList => {
-  Object.keys(services)
-    .map(key => cleanup.get(services[key]))
-    .filter(Boolean)
-    .forEach(fn => fn())
-  return init(serviceList)
+services.kill = name => {
+  const clear = cleanup.get(services[key])
+  return clear && clear()
 }
+services.init = init
+services.killAll = () => Object.keys(services).forEach(services.kill)
 
 module.exports = services
