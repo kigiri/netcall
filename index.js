@@ -2,6 +2,7 @@
 const net = require('net')
 const path = require('path')
 const EventEmitter = require('events')
+const inspector = require('inspector')
 
 const cwd = process.cwd()
 const pkg = require(path.join(cwd, 'package.json'))
@@ -147,10 +148,10 @@ const handleSocket = (socket, broadcasters) => {
 }
 
 const buildRPCHanlder = (broadcasters, index, socket) => function handler(d) {
-  return new Promise((s, f) => {
-    const id = genId()
-    if (broadcasters[id]) return handler(d)
+  const id = genId()
+  if (broadcasters[id]) return handler(d)
 
+  return new Promise((s, f) => {
     const timeout = setTimeout(() => {
       broadcasters[id] = undefined
       const err = Error(`timeout`)
@@ -182,11 +183,11 @@ const open = (port, count = 0) => getClientSocket(port, count)
     : (console.log(`connection on port ${port} retry #${count} / 30`),
       open(port, count)))
 
-const cleanup = new WeakMap()
+const cleanup = new WeakMap
+const internalMethods = new WeakMap
 const connect = (port, client, prevRoutes, ev) => open(port)
   .then(socket => {
     const broadcasters = Object.create(null)
-
     handleSocket(socket, broadcasters)
 
     return buildRPCHanlder(broadcasters, 0, socket)()
@@ -203,8 +204,8 @@ const connect = (port, client, prevRoutes, ev) => open(port)
     routeNames.forEach(name => {
       const { index, isEvent } = routes[name]
       if (!isEvent) {
-        client[name] = buildRPCHanlder(broadcasters, index, socket)
-        return ret[name] = arg => client[name](arg)
+        return ret[name] =
+            client[name] = buildRPCHanlder(broadcasters, index, socket)
       }
 
       if (prevRoutes) {
@@ -248,6 +249,13 @@ const connect = (port, client, prevRoutes, ev) => open(port)
       socket.end()
     })
 
+    internalMethods.set(ret, {
+      routes: buildRPCHanlder(broadcasters, 0, socket),
+      sub: buildRPCHanlder(broadcasters, 1, socket),
+      openInspector: buildRPCHanlder(broadcasters, 2, socket),
+      closeInspector: buildRPCHanlder(broadcasters, 3, socket),
+    })
+
     return ret
   })
 
@@ -265,8 +273,7 @@ const handleAnswer = (broadcasters, index, fn) =>
 
 console.log(`Starting service ${serviceName}:${servicePort}...`)
 
-let q
-const init = serviceList => q = Promise.all(serviceList.map((name =>
+const init = serviceList => Promise.all(serviceList.map((name =>
     connect(getPort(name)).then(client => services[name] = client))))
   .then(() => new Promise((s,f) => {
     const broadcasters = Object.create(null)
@@ -299,8 +306,7 @@ const init = serviceList => q = Promise.all(serviceList.map((name =>
     })
 
     const routeList = routeHandlers.map(({ name, handler }, index) => {
-      // pad index because the 2 first routes are reserved
-      index = index + 2
+      index += 4 // pad index because the 4 first routes are reserved
       if (handler) {
         handleAnswer(broadcasters, index, handler)
         return { [name]: { index } }
@@ -323,13 +329,31 @@ const init = serviceList => q = Promise.all(serviceList.map((name =>
     }
 
     broadcasters[1] = ({ data, socket }) => {
-      const list = listenners[data]
+      const list = listenners[data] || (listenners[data] = [])
       list.push(socket)
       socket.on('close', () => list.splice(list.indexOf(socket), 1))
     }
+
+    broadcasters[2] = ({ socket, id, data = {} }) => {
+      let returnValue
+      try { inspector.open(data.host, data.port) }
+      catch (err) { returnValue = err }
+      returnValue || (returnValue = inspector.url())
+      console.log({ returnValue, id })
+      socket.write(buildMessage(2, returnValue, id))
+    }
+
+    broadcasters[3] = ({ socket, id }) => {
+      let returnValue
+      console.log(inspector, 'Debugger stopped')
+      console.log('Debugger stopped')
+      try { inspector.close() }
+      catch (err) { returnValue = err }
+      socket.write(buildMessage(3, returnValue, id))
+    }
   }))
 
-init(pkg.service || [])
+const q = init(pkg.service || [])
 
 services.onload = fn => q.then(fn)
 services.onerror = fn => q.catch(fn)
@@ -342,6 +366,8 @@ services.kill = name => {
   const clear = cleanup.get(services[key])
   return clear && clear()
 }
+
+services.getInternalMethods = service => internalMethods.get(service)
 services.init = init
 services.killAll = () => Object.keys(services).forEach(services.kill)
 
